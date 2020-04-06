@@ -1,6 +1,7 @@
 from typing import List, Dict, Tuple
 from enum import Enum, auto
 from copy import copy
+from abc import ABCMeta, abstractmethod
 from type_check import type_check
 
 class Singleton(object):
@@ -8,6 +9,11 @@ class Singleton(object):
         if not hasattr(cls, "_instance"):
             cls._instance = super(Singleton, cls).__new__(cls)
         return cls._instance
+
+class Prototype(metaclass=ABCMeta):
+    @abstractmethod
+    def clone(self):
+        pass
 
 class Pd(Enum):
     NONE = auto()
@@ -35,23 +41,24 @@ class ItemFactory(Singleton):
 class ItemSet: # amount >= 0を保証
     @type_check
     def __init__(self, name: Pd, amount: int):
-        if amount < 0:
-            raise MinusError("MinusError")
+        self.name = name
         self.item = ItemFactory().get(name) # FactoryからItem取得
         self.amount = amount
 
     def minus(self) -> 'ItemSet':
         return ItemSet(self.item.name, -self.amount)
 
-    def name(self) -> Pd:
-        return self.item.name
-
-class ItemCatalog:
+class ItemCatalog(Prototype):
     @type_check
     def __init__(self, itemsets: List[ItemSet] = list()):
         self.dict: Dict[Item, int] = dict()
         if len(itemsets) > 0:
             self.put(itemsets)
+
+    def clone(self):
+        cloned_self = copy(self)
+        cloned_self.dict = copy(self.dict)
+        return cloned_self
 
     @type_check
     def add(self, itemset: ItemSet):
@@ -59,6 +66,17 @@ class ItemCatalog:
             self.dict[itemset.item] += itemset.amount
         else:
             self.dict[itemset.item] = itemset.amount
+
+    @type_check
+    def add_no_minus(self, itemset: ItemSet):
+        sum_amount = 0
+        if itemset.item in self.dict.keys():
+            sum_amount = self.dict[itemset.item]
+        if sum_amount + itemset.amount < 0:
+            # マイナス値があった場合はエラー
+            raise MinusMergeError("MinusMergeError")
+        else:
+            self.add(itemset)
 
     @type_check
     def put(self, itemsets: List[ItemSet]):
@@ -79,7 +97,7 @@ class ItemCatalog:
 
     def merge_no_minus(self, catalog: 'ItemCatalog') -> 'ItemCatalog':
         # 自身のコピーにまずマージして検証
-        merged_catalog = copy(self).merge(catalog)
+        merged_catalog = self.clone().merge(catalog)
         for item in catalog.keys():
             if merged_catalog.get(item) < 0:
                 # マイナス値があった場合はエラー
@@ -112,34 +130,37 @@ class ItemCatalog:
 
 class Expect:
     def __init__(self):
-        # (予測期間, 最新獲得日, 回数)
-        self.forcast = 0
-        self.amount = 0
-        self._time = World().time
-        self._count = 0
+        self.forcast = 0 # 予測期間
+        self.amount = 0 # 予測獲得量
+        self._time = World().time # 最新獲得日
+        self._count = 0 # 獲得回数
 
     @type_check
     def estimate(self, amount: int):
         # かかった期間
         term = World().time - self._time
-        self._count += 1
-        # 次の予想獲得単位時間（平滑移動平均）
-        self.forcast = ((self._count-1)*self.forcast + term)/self._count
-        # 単位時間あたりのItemの獲得量（平滑移動平均）
-        self.amount = ((self._count-1)*self.amount + (amount/term))/self._count
-        self._time = World().time
+        if term > 0:
+            self._count += 1
+            # 次の予想獲得単位時間（平滑移動平均）
+            self.forcast = ((self._count-1)*self.forcast + term)/self._count
+            # 単位時間あたりのItemの獲得量（平滑移動平均）
+            self.amount = ((self._count-1)*self.amount + (amount/term))/self._count
+            self._time = World().time
+        # 同タイミングの場合
+        else:
+            self.amount = ((self._count-1)*self.amount + amount)/self._count
 
 class Recipe:
     @type_check
     def __init__(self, srcset: ItemCatalog, dstset: ItemCatalog):
-        self.srcset = srcset.check_no_minus()
-        self.dstset = dstset.check_no_minus()
+        self.srcset = srcset.check_no_minus().clone()
+        self.dstset = dstset.check_no_minus().clone()
 
     @type_check
     def manufact(self, properties: ItemCatalog) -> bool:
         try:
             properties.merge_no_minus(self.srcset.minus())
-        except Exception as e:
+        except MinusMergeError as e:
             print(e)
             return False
         properties.merge(self.dstset)
@@ -153,10 +174,11 @@ class Schedule:
 
 class Agent:
     @type_check
-    def __init__(self, products: ItemCatalog, properties: ItemCatalog, nessesities: ItemCatalog, schedule: Schedule):
-        self.products = products.check_no_minus() # 単位時間に生産できるItemセット
-        self.properties = properties.check_no_minus() # 所有Item初期設定
-        self.nessesities = nessesities.check_no_minus() # World.time単位につき必要なItemセット
+    def __init__(self, name: str, products: ItemCatalog, nessesities: ItemCatalog, properties: ItemCatalog, schedule: Schedule):
+        self.name = name
+        self.products = products.check_no_minus().clone() # 単位時間に生産できるItemセット
+        self.nessesities = nessesities.check_no_minus().clone() # World.time単位につき必要なItemセット
+        self.properties = properties.check_no_minus().clone() # 所有Item初期設定
         self.schedule = schedule
         # Dict[Item,Expect]
         self.expects = {k: Expect() for k in nessesities.keys()}
@@ -164,18 +186,19 @@ class Agent:
     def produce(self):
         self.properties.merge(self.products)
 
+    def consume(self):
+        # 必要分を所有から差し引き
+        self.properties.merge(self.nessesities.minus())
+
     @type_check
     def accept(self, diff: ItemSet):
         self.properties.add(diff)
-        self.expects[diff.item].estimate(diff.amount)
+        if diff.item in self.expects.keys():
+            self.expects[diff.item].estimate(diff.amount)
 
     @type_check
     def pay(self, diff: ItemSet):
         self.accept(diff.minus())
-
-    def consume(self):
-        # 必要分を所有から差し引き
-        self.properties.merge(self.nessesities.minus())
 
     @type_check
     def manufact(self, recipe: Recipe):
@@ -207,7 +230,7 @@ class Price:
     @type_check
     def __init__(self, goods: ItemSet, tag: ItemSet):
         if goods.amount != 1:
-            raise NoUnitError("Goods is not an Unit!")
+            raise NoUnitError("Goods's price should be defined by one!")
         self.goods = goods
         self.tag = tag
 
@@ -239,7 +262,7 @@ class Market:
                         # もし欲しい物があったら
                         if want in goods.keys():
                             # もしほしい数量在庫が存在していたら
-                            if goods[want] >= amount:
+                            if goods.get(want) >= amount:
                                 # 買われる商品（欲しい量だけ）
                                 bought = ItemSet(want.name, amount)
                                 # 商品の値段
@@ -247,7 +270,7 @@ class Market:
                             # もしほしい数量より在庫が不足していたら
                             else:
                                 # 買われる商品（在庫全部）
-                                bought = ItemSet(want.name, goods[want])
+                                bought = ItemSet(want.name, goods.get(want))
                                 # 商品の値段
                                 price = self.price_tag(bought)
                             # 決済
@@ -255,22 +278,33 @@ class Market:
                             buyer.pay(price)
                             seller.accept(price)
                             seller.pay(bought)
+                            print("{0}が{1}から{2}[{3}]を{4}[{5}]で購入".format(
+                                    buyer.name, seller.name, 
+                                    bought.name, bought.amount, 
+                                    price.name, price.amount
+                                ))
 
     def price_tag(self, itemset: ItemSet) -> ItemSet:
         for price in self.marketprice:
             if itemset.item is price.goods.item:
-                return ItemSet(price.goods.tag.name, price.goods.tag.amount * itemset.amount)
+                return ItemSet(price.tag.name, price.tag.amount * itemset.amount)
+        raise NoPriceError("No price is defined!")
 
-class MinusError(Exception):
+class Error(Exception):
     def __init__(self, message):
         self.message = message
 
-class MinusMergeError(MinusError):
+class MinusError(Error):
     pass
 
-class NoUnitError(Exception):
-    def __init__(self, message):
-        self.message = message
+class MinusMergeError(Exception):
+    pass
+
+class NoUnitError(Error):
+    pass
+
+class NoPriceError(Error):
+    pass
 
 if __name__ == '__main__':
     # 商品と数の定義
@@ -288,19 +322,20 @@ if __name__ == '__main__':
     none0_c   = ItemCatalog([none0])
 
     # 製造のレシピ
-    rc1 = Recipe(lavor1_c, money1_c)
+    rc1 = Recipe(lavor1_c, meal1_c)
 
     # オーダーの期限
     sch1 = Schedule(1)
     sch30 = Schedule(30)
 
     agents = list()
-    for n in range(5):
-        agents.append(Agent(lavor1_c, money1_c, money1_c, sch1))
+    names = ["A1", "A2", "A3"]
+    for name in names:
+        agents.append(Agent(name, lavor1_c, meal1_c, money1_c, sch1))
 
-    plant = Agent(none0_c, money100_c, lavor1_c, sch30)
+    plant = Agent("Plant", none0_c, lavor1_c, money100_c, sch1)
 
-    mk = Market([Price(lavor1, meal1)])
+    mk = Market([Price(lavor1, money1), Price(meal1, money1)])
 
     while True:
         mk.clear_order
@@ -310,5 +345,6 @@ if __name__ == '__main__':
             mk.add_order(agent.make_order()) #売買
         plant.manufact_all(rc1) #製造（変換）
         mk.add_order(plant.make_order()) #売買
+        mk.on_market()
         World().next()
 
