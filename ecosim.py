@@ -25,6 +25,7 @@ class World(Singleton):
     time = 0
     def next(self):
         World.time += 1
+        print("######## World Time: {0} ########".format(World.time))
 
 class Item:
     @type_check
@@ -139,15 +140,20 @@ class Expect:
     def estimate(self, amount: int):
         # かかった期間
         term = World().time - self._time
-        if term > 0:
+        # 初日最初の獲得
+        if self._count == 0:
+            self._count += 1
+            self.amount = amount
+        # ２日目以降の獲得
+        elif term > 0:
             self._count += 1
             # 次の予想獲得単位時間（平滑移動平均）
             self.forcast = ((self._count-1)*self.forcast + term)/self._count
             # 単位時間あたりのItemの獲得量（平滑移動平均）
             self.amount = ((self._count-1)*self.amount + (amount/term))/self._count
             self._time = World().time
-        # 同タイミングの場合
-        else:
+        # 同日の場合
+        elif self._count > 0:
             self.amount = ((self._count-1)*self.amount + amount)/self._count
 
 class Recipe:
@@ -169,8 +175,15 @@ class Recipe:
 class Schedule:
     @type_check
     def __init__(self, duration: int):
-        self.start = World.time
         self.duration = duration
+        self.start = World.time
+    
+    def update(self):
+        if World().time >= self.start + self.duration:
+            self.start = World().time
+            return True
+        else:
+            return False
 
 class Agent:
     @type_check
@@ -185,10 +198,13 @@ class Agent:
 
     def produce(self):
         self.properties.merge(self.products)
+        print("{0}は生産".format(self.name))
 
     def consume(self):
-        # 必要分を所有から差し引き
-        self.properties.merge(self.nessesities.minus())
+        if self.schedule.update:
+            # 必要分を所有から差し引き
+            self.properties.merge(self.nessesities.minus())
+            print("{0}は消費".format(self.name))
 
     @type_check
     def accept(self, diff: ItemSet):
@@ -203,28 +219,28 @@ class Agent:
     @type_check
     def manufact(self, recipe: Recipe):
         recipe.manufact(self.properties)
+        print("{0}は製造".format(self.name))
 
     @type_check
     def manufact_all(self, recipe: Recipe):
-        while recipe.manufact(self.properties):
+        while self.manufact(recipe):
             pass
 
     def make_order(self) -> 'Order':
-        if World.time - self.schedule.start >= self.schedule.duration:
-            # 不足分を欲しい物セットに
-            future_shortage = self.nessesities.minus().merge(self.properties)
-            buysets = ItemCatalog([ItemSet(k.name, -v) for k, v in future_shortage.items() if v < 0])
-            # 残り分を売り物セットに
-            selsets = ItemCatalog([ItemSet(k.name, v) for k, v in future_shortage.items() if v > 0])
-            return Order(self, buysets, selsets, self.schedule)
+        # 消費発動後の所有Item
+        future_assets = self.nessesities.minus().merge(self.properties)
+        # 不足分を欲しい物セットに
+        buysets = ItemCatalog([ItemSet(k.name, -v) for k, v in future_assets.items() if v < 0])
+        # 残り分を売り物セットに
+        selsets = ItemCatalog([ItemSet(k.name, v) for k, v in future_assets.items() if v > 0])
+        return Order(self, buysets, selsets)
 
 class Order:
     @type_check
-    def __init__(self, agent: Agent, buy_goods: ItemCatalog, sel_goods: ItemCatalog, schedule: Schedule):
+    def __init__(self, agent: Agent, buy_goods: ItemCatalog, sel_goods: ItemCatalog):
         self.agent = agent
         self.buy_goods = buy_goods.check_no_minus()
         self.sel_goods = sel_goods.check_no_minus()
-        self.schedule = schedule
 
 class Price:
     @type_check
@@ -240,15 +256,14 @@ class Market:
         self.marketprice = marketprice
         self.clear_order()
 
-    @type_check
-    def add_order(self, order):
-        if order is not None:
-            self.request[order.agent] = order.buy_goods
-            self.commodity[order.agent] = order.sel_goods
-
     def clear_order(self):
         self.request: Dict[Agent, ItemCatalog] = dict()
         self.commodity: Dict[Agent, ItemCatalog] = dict()
+
+    @type_check
+    def add_order(self, order):
+        self.request[order.agent] = order.buy_goods
+        self.commodity[order.agent] = order.sel_goods
 
     def on_market(self):
         # 買い物客が
@@ -274,10 +289,12 @@ class Market:
                                 # 商品の値段
                                 price = self.price_tag(bought)
                             # 決済
-                            buyer.accept(bought)
+                            seller.pay(bought)
                             buyer.pay(price)
                             seller.accept(price)
-                            seller.pay(bought)
+                            buyer.accept(bought)
+                            self.add_order(seller.make_order())
+                            self.add_order(buyer.make_order())
                             print("{0}が{1}から{2}[{3}]を{4}[{5}]で購入".format(
                                     buyer.name, seller.name, 
                                     bought.name, bought.amount, 
