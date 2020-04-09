@@ -218,13 +218,12 @@ class Agent:
 
     @type_check
     def manufact(self, recipe: Recipe):
-        recipe.manufact(self.properties)
-        print("{0}は製造".format(self.name))
+        return recipe.manufact(self.properties)
 
     @type_check
     def manufact_all(self, recipe: Recipe):
         while self.manufact(recipe):
-            pass
+            print("{0}は製造".format(self.name))
 
     def make_order(self) -> 'Order':
         # 消費発動後の所有Item
@@ -254,27 +253,24 @@ class Market:
     @type_check
     def __init__(self, marketprice: List[Price]):
         self.marketprice = marketprice
-        self.clear_order()
-
-    def clear_order(self):
-        self.request: Dict[Agent, ItemCatalog] = dict()
-        self.commodity: Dict[Agent, ItemCatalog] = dict()
+        self.agents = list()
 
     @type_check
-    def add_order(self, order):
-        self.request[order.agent] = order.buy_goods
-        self.commodity[order.agent] = order.sel_goods
+    def add_agent(self, agent: Agent):
+        self.agents.append(agent)
 
     def on_market(self):
         # 買い物客が
-        for buyer, wants in self.request.items():
+        for buyer in self.agents:
             # いろんな店舗に出向き
-            for seller, goods in self.commodity.items():
+            for seller in self.agents:
                 # もちろん自分の店舗以外で
                 if buyer is not seller:
                     # 欲しい物がないか探す
+                    wants = buyer.make_order().buy_goods
                     for want, amount in wants.items():
                         # もし欲しい物があったら
+                        goods = seller.make_order().sel_goods
                         if want in goods.keys():
                             # もしほしい数量在庫が存在していたら
                             if goods.get(want) >= amount:
@@ -293,8 +289,6 @@ class Market:
                             buyer.pay(price)
                             seller.accept(price)
                             buyer.accept(bought)
-                            self.add_order(seller.make_order())
-                            self.add_order(buyer.make_order())
                             print("{0}が{1}から{2}[{3}]を{4}[{5}]で購入".format(
                                     buyer.name, seller.name, 
                                     bought.name, bought.amount, 
@@ -326,6 +320,7 @@ class NoPriceError(Error):
 if __name__ == '__main__':
     # 商品と数の定義
     lavor1  = ItemSet(Pd.LAVOR, 1)
+    lavor3  = ItemSet(Pd.LAVOR, 3)
     money1  = ItemSet(Pd.MONEY, 1)
     meal1  = ItemSet(Pd.MEAL, 1)
     money100 = ItemSet(Pd.MONEY, 100)
@@ -333,6 +328,7 @@ if __name__ == '__main__':
 
     # 商品と数のカタログの定義
     lavor1_c  = ItemCatalog([lavor1])
+    lavor3_c  = ItemCatalog([lavor3])
     money1_c  = ItemCatalog([money1])
     meal1_c  = ItemCatalog([meal1])
     money100_c = ItemCatalog([money100])
@@ -350,18 +346,19 @@ if __name__ == '__main__':
     for name in names:
         agents.append(Agent(name, lavor1_c, meal1_c, money1_c, sch1))
 
-    plant = Agent("Plant", none0_c, lavor1_c, money100_c, sch1)
+    plant = Agent("Plant", none0_c, lavor3_c, money100_c, sch1)
 
     mk = Market([Price(lavor1, money1), Price(meal1, money1)])
 
+    for agent in agents:
+        mk.add_agent(agent) #売買
+    mk.add_agent(plant) #売買
+
     while True:
-        mk.clear_order
         for agent in agents:
             agent.produce() #生産
             agent.consume() #消費
-            mk.add_order(agent.make_order()) #売買
         plant.manufact_all(rc1) #製造（変換）
-        mk.add_order(plant.make_order()) #売買
         mk.on_market()
         World().next()
 
