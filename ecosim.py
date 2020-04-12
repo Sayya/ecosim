@@ -1,7 +1,8 @@
 from typing import List, Dict, Tuple
 from enum import Enum, auto
-from copy import copy
-from abc import ABCMeta, abstractmethod
+from copy import copy # 浅いコピー
+from abc import ABCMeta, abstractmethod # 抽象クラスを実現する
+from random import gauss # 正規分布関数
 from type_check import type_check
 
 class Singleton(object):
@@ -39,6 +40,7 @@ class ItemFactory(Singleton):
             ItemFactory.factory[name] = Item(name)
         return ItemFactory.factory[name]
 
+# 一つの商品と数
 class ItemSet: # amount >= 0を保証
     @type_check
     def __init__(self, name: Pd, amount: int):
@@ -49,6 +51,7 @@ class ItemSet: # amount >= 0を保証
     def minus(self) -> 'ItemSet':
         return ItemSet(self.item.name, -self.amount)
 
+# 商品と数のカタログ
 class ItemCatalog(Prototype):
     @type_check
     def __init__(self, itemsets: List[ItemSet] = list()):
@@ -156,6 +159,7 @@ class Expect:
         elif self._count > 0:
             self.amount = ((self._count-1)*self.amount + amount)/self._count
 
+# 製造のレシピ
 class Recipe:
     @type_check
     def __init__(self, srcset: ItemCatalog, dstset: ItemCatalog):
@@ -172,6 +176,7 @@ class Recipe:
         properties.merge(self.dstset)
         return True
 
+# 消費の間隔
 class Schedule:
     @type_check
     def __init__(self, duration: int):
@@ -185,23 +190,42 @@ class Schedule:
         else:
             return False
 
+# 生産性の管理
+class Progress:
+    @type_check
+    def __init__(self, mu: float, sigma: float):
+        self.mu = mu
+        self.sigma = sigma
+        self.tank = 0
+    
+    def update(self):
+        self.tank += gauss(self.mu, self.sigma)
+        if self.tank >= 1:
+            self.tank %= 1
+            return True
+        else:
+            return False
+
 class Agent:
     @type_check
-    def __init__(self, name: str, products: ItemCatalog, nessesities: ItemCatalog, properties: ItemCatalog, schedule: Schedule):
+    def __init__(self, name: str, products: ItemCatalog, nessesities: ItemCatalog,
+                properties: ItemCatalog, schedule: Schedule, progress: Progress):
         self.name = name
         self.products = products.check_no_minus().clone() # 単位時間に生産できるItemセット
         self.nessesities = nessesities.check_no_minus().clone() # World.time単位につき必要なItemセット
         self.properties = properties.check_no_minus().clone() # 所有Item初期設定
-        self.schedule = schedule
+        self.schedule = copy(schedule)
+        self.progress = copy(progress)
         # Dict[Item,Expect]
         self.expects = {k: Expect() for k in nessesities.keys()}
 
     def produce(self):
-        self.properties.merge(self.products)
-        print("{0}は生産".format(self.name))
+        if self.progress.update():
+            self.properties.merge(self.products)
+            print("{0}は生産".format(self.name))
 
     def consume(self):
-        if self.schedule.update:
+        if self.schedule.update():
             # 必要分を所有から差し引き
             self.properties.merge(self.nessesities.minus())
             print("{0}は消費".format(self.name))
@@ -320,16 +344,18 @@ class NoPriceError(Error):
 if __name__ == '__main__':
     # 商品と数の定義
     lavor1  = ItemSet(Pd.LAVOR, 1)
-    lavor3  = ItemSet(Pd.LAVOR, 3)
+    lavor30  = ItemSet(Pd.LAVOR, 30)
     money1  = ItemSet(Pd.MONEY, 1)
+    money3  = ItemSet(Pd.MONEY, 3)
     meal1  = ItemSet(Pd.MEAL, 1)
     money100 = ItemSet(Pd.MONEY, 100)
     none0   = ItemSet(Pd.NONE, 0)
 
     # 商品と数のカタログの定義
     lavor1_c  = ItemCatalog([lavor1])
-    lavor3_c  = ItemCatalog([lavor3])
+    lavor30_c  = ItemCatalog([lavor30])
     money1_c  = ItemCatalog([money1])
+    money3_c  = ItemCatalog([money3])
     meal1_c  = ItemCatalog([meal1])
     money100_c = ItemCatalog([money100])
     none0_c   = ItemCatalog([none0])
@@ -337,16 +363,22 @@ if __name__ == '__main__':
     # 製造のレシピ
     rc1 = Recipe(lavor1_c, meal1_c)
 
-    # オーダーの期限
+    # 消費の間隔
     sch1 = Schedule(1)
     sch30 = Schedule(30)
+    sch0 = Schedule(0)
+
+    # 生産性の管理
+    pgr1 = Progress(1.4, 0.2) # ブレのある平均的生産性
+    pgr2 = Progress(1.5, 0.1) # 安定した高生産性
+    pgr3 = Progress(1.3, 0.5) # 不安定な低生産性
+    pgr0 = Progress(0.0, 0.0)
 
     agents = list()
-    names = ["A1", "A2", "A3"]
-    for name in names:
-        agents.append(Agent(name, lavor1_c, meal1_c, money1_c, sch1))
-
-    plant = Agent("Plant", none0_c, lavor3_c, money100_c, sch1)
+    agents.append(Agent("A1", lavor1_c, meal1_c, money3_c, sch1, pgr1))
+    agents.append(Agent("A2", lavor1_c, meal1_c, money3_c, sch1, pgr2))
+    agents.append(Agent("A3", lavor1_c, meal1_c, money3_c, sch1, pgr3))
+    plant = Agent("Plant", none0_c, lavor30_c, money100_c, sch0, pgr0)
 
     mk = Market([Price(lavor1, money1), Price(meal1, money1)])
 
