@@ -170,8 +170,8 @@ class Recipe:
     def manufact(self, properties: ItemCatalog) -> bool:
         try:
             properties.merge_no_minus(self.srcset.minus())
-        except MinusMergeError as e:
-            print(e)
+        except MinusError as e:
+            print("{0}：製造できず".format(e))
             return False
         properties.merge(self.dstset)
         return True
@@ -238,7 +238,7 @@ class Agent:
 
     @type_check
     def pay(self, diff: ItemSet):
-        self.accept(diff.minus())
+        self.properties.add_no_minus(diff.minus())
 
     @type_check
     def manufact(self, recipe: Recipe):
@@ -309,15 +309,20 @@ class Market:
                                 # 商品の値段
                                 price = self.price_tag(bought)
                             # 決済
-                            seller.pay(bought)
-                            buyer.pay(price)
-                            seller.accept(price)
-                            buyer.accept(bought)
-                            print("{0}が{1}から{2}[{3}]を{4}[{5}]で購入".format(
-                                    buyer.name, seller.name, 
-                                    bought.name, bought.amount, 
-                                    price.name, price.amount
-                                ))
+                            try:
+                                buyer.pay(price) # 買い手側のみ料金の不足がありうる
+                                seller.pay(bought)
+                                buyer.accept(bought)
+                                seller.accept(price)
+                                print("{0}が{1}から{2}[{3}]を{4}[{5}]で購入".format(
+                                        buyer.name, seller.name, 
+                                        bought.name, bought.amount, 
+                                        price.name, price.amount
+                                    ))
+                            except MinusError as e:
+                                print("{0}：{1}が{2}[{3}]を購入できず".format(
+                                        e, buyer.name, bought.name, bought.amount
+                                    ))
 
     def price_tag(self, itemset: ItemSet) -> ItemSet:
         for price in self.marketprice:
@@ -332,7 +337,7 @@ class Error(Exception):
 class MinusError(Error):
     pass
 
-class MinusMergeError(Exception):
+class MinusMergeError(MinusError):
     pass
 
 class NoUnitError(Error):
@@ -369,9 +374,9 @@ if __name__ == '__main__':
     sch0 = Schedule(0)
 
     # 生産性の管理
-    pgr1 = Progress(1.4, 0.2) # ブレのある平均的生産性
-    pgr2 = Progress(1.5, 0.1) # 安定した高生産性
-    pgr3 = Progress(1.3, 0.5) # 不安定な低生産性
+    pgr1 = Progress(1.0, 0.2) # ブレのある平均的生産性
+    pgr2 = Progress(1.1, 0.1) # 安定した高生産性
+    pgr3 = Progress(0.8, 0.5) # 不安定な低生産性
     pgr0 = Progress(0.0, 0.0)
 
     agents = list()
